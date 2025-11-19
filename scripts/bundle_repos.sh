@@ -73,23 +73,34 @@ process_repo() {
         fi
     done
 
-    # Always include tags
-    refs_to_bundle="$refs_to_bundle --tags"
-
+    # Check if we found any valid branches
     if [ -z "$refs_to_bundle" ]; then
-        echo "Warning: No valid refs found to bundle for $repo. Skipping."
+        echo "Warning: No valid branches found to bundle for $repo. Skipping."
+        # Clean up the empty directory if it was created
+        if [ -d "$bundle_dir" ] && [ -z "$(ls -A "$bundle_dir")" ]; then
+            rmdir "$bundle_dir"
+        fi
         return
     fi
+    
+    # Include tags only if we have valid branches
+    refs_to_bundle="$refs_to_bundle --tags"
 
-    local bundle_file="$bundle_dir/$repo.bundle"
+    local timestamp=$(date +"%Y-%m-%d_%H-%M-%S")
+    local bundle_file="$bundle_dir/${repo}_${timestamp}.bundle"
     
     # Create bundle
-    # Using --since="1 month ago" as requested
+    # Using --since="1 month ago" for incremental bundle
     echo "Creating bundle for $repo with refs: $refs_to_bundle"
-    if git bundle create "$bundle_file" --since="1 month ago" $refs_to_bundle; then
+    if git bundle create "$bundle_file" --since="1 month ago" $refs_to_bundle 2>/dev/null; then
         echo "Successfully created bundle: $bundle_file"
     else
-        echo "Error: Failed to create bundle for $repo"
+        echo "No commits found in the last month for $repo. Skipping bundle creation."
+        # Clean up the empty directory if it was created
+        if [ -d "$bundle_dir" ] && [ -z "$(ls -A "$bundle_dir")" ]; then
+            rmdir "$bundle_dir"
+        fi
+        return
     fi
 }
 

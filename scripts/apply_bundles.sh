@@ -12,51 +12,52 @@ fi
 # Resolve relative paths
 [[ "$BUNDLE_OUTPUT_DIR" != /* ]] && BUNDLE_OUTPUT_DIR="$PROJECT_ROOT/$BUNDLE_OUTPUT_DIR"
 
-ZIP_FILE=""
+ARCHIVE_FILE=""
 REPO_NAME=""
 
 # Parse arguments
 while getopts "f:r:" opt; do
   case $opt in
-    f) ZIP_FILE="$OPTARG" ;;
+    f) ARCHIVE_FILE="$OPTARG" ;;
     r) REPO_NAME="$OPTARG" ;;
-    *) echo "Usage: $0 [-f zip_file] [-r repo_name]" >&2; exit 1 ;;
+    *) echo "Usage: $0 [-f archive_file] [-r repo_name]" >&2; exit 1 ;;
   esac
 done
 
-# If no zip file provided, try to find the latest one
-if [ -z "$ZIP_FILE" ]; then
-    # Assuming zip files are in the parent of BUNDLE_OUTPUT_DIR (project root/bundles/..)
+# If no archive file provided, try to find the latest one
+if [ -z "$ARCHIVE_FILE" ]; then
+    # Assuming archive files are in the parent of BUNDLE_OUTPUT_DIR (project root/bundles/..)
     # Actually config says BUNDLE_OUTPUT_DIR is .../bundles. 
-    # zip_bundles.sh puts it in .../bundles/../$ZIP_NAME which is project root.
+    # zip_bundles.sh puts it in .../bundles/../$ARCHIVE_NAME which is project root.
     # Let's look in the project root or where config.env is relative to.
     PROJECT_ROOT="$(dirname "$SOURCE_BASE_DIR")" 
     # Wait, SOURCE_BASE_DIR is defined in config.
     # Let's just look in the directory above BUNDLE_OUTPUT_DIR as per zip script
     SEARCH_DIR="$(dirname "$BUNDLE_OUTPUT_DIR")"
-    ZIP_FILE=$(ls -t "$SEARCH_DIR"/migration-suite-*.zip 2>/dev/null | head -n 1)
+    ARCHIVE_FILE=$(ls -t "$SEARCH_DIR"/migration-suite-*.tar.gz 2>/dev/null | head -n 1)
     
-    if [ -z "$ZIP_FILE" ]; then
-        echo "Error: No zip file provided and none found in $SEARCH_DIR."
+    if [ -z "$ARCHIVE_FILE" ]; then
+        echo "Error: No archive file provided and none found in $SEARCH_DIR."
         exit 1
     fi
-    echo "Auto-detected latest zip file: $ZIP_FILE"
+    echo "Auto-detected latest archive file: $ARCHIVE_FILE"
 fi
 
 TEMP_EXTRACT_DIR=$(mktemp -d)
-echo "Extracting $ZIP_FILE to $TEMP_EXTRACT_DIR..."
-unzip -q "$ZIP_FILE" -d "$TEMP_EXTRACT_DIR"
+echo "Extracting $ARCHIVE_FILE to $TEMP_EXTRACT_DIR..."
+tar -xzf "$ARCHIVE_FILE" -C "$TEMP_EXTRACT_DIR"
 
 # Function to apply bundle to a repo
 apply_bundle() {
     local repo=$1
-    local bundle_path="$TEMP_EXTRACT_DIR/$repo/$repo.bundle"
+    # Find the bundle file - it now has a timestamp in the name
+    local bundle_path=$(ls "$TEMP_EXTRACT_DIR/$repo/${repo}_"*.bundle 2>/dev/null | head -n 1)
     local dest_repo_path="$DEST_BASE_DIR/$repo"
 
     echo "Applying bundle for $repo..."
 
-    if [ ! -f "$bundle_path" ]; then
-        echo "Warning: Bundle file $bundle_path not found. Skipping."
+    if [ -z "$bundle_path" ] || [ ! -f "$bundle_path" ]; then
+        echo "Warning: Bundle file for $repo not found in $TEMP_EXTRACT_DIR/$repo/. Skipping."
         return
     fi
 
