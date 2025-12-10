@@ -5,17 +5,18 @@
 # Purpose:
 #   Applies git bundles to destination repositories in the isolated environment.
 #   For each repository:
-#     1. Extracts bundle from the archive
-#     2. Verifies bundle integrity
-#     3. Fetches changes into the local repository
-#     4. Configures GitLab remote with credentials
-#     5. Pushes branches and tags to GitLab
+#     1. Searches for the local repo in DEST_SEARCH_DIRS
+#     2. Extracts bundle from the archive
+#     3. Verifies bundle integrity
+#     4. Fetches changes into the local repository
+#     5. Configures GitLab remote with credentials
+#     6. Pushes branches and tags to GitLab
 #
 # Usage:
 #   ./apply_bundles.sh
 #
 # Required .env variables:
-#   DEST_BASE_DIR      - Parent directory containing destination repositories
+#   DEST_SEARCH_DIRS   - Comma-separated directories to search for repositories
 #   GITLAB_HOST        - GitLab server hostname (e.g., gitlab.example.com)
 #   GITLAB_GROUP       - GitLab group/namespace for repositories
 #   GITLAB_USERNAME    - GitLab username for authentication
@@ -38,19 +39,35 @@ source "$SCRIPT_DIR/common.sh"
 load_config
 
 # Validate required variables for this script
-validate_required_vars DEST_BASE_DIR GITLAB_HOST GITLAB_GROUP GITLAB_USERNAME GITLAB_TOKEN
+validate_required_vars DEST_SEARCH_DIRS GITLAB_HOST GITLAB_GROUP GITLAB_USERNAME GITLAB_TOKEN
 
 # Set defaults for optional variables
 GITLAB_AUTH_METHOD="${GITLAB_AUTH_METHOD:-https}"
 ARCHIVE_INPUT_DIR="${ARCHIVE_INPUT_DIR:-$PROJECT_ROOT}"
 
-# Resolve paths
-DEST_BASE_DIR=$(convert_path "$DEST_BASE_DIR")
+# Resolve archive input directory
 ARCHIVE_INPUT_DIR=$(resolve_path "$ARCHIVE_INPUT_DIR")
 
-# Validate destination directory exists
-if [ ! -d "$DEST_BASE_DIR" ]; then
-    echo "Error: DEST_BASE_DIR does not exist: $DEST_BASE_DIR"
+# Parse DEST_SEARCH_DIRS into an array
+IFS=',' read -ra DEST_DIRS_ARRAY <<< "$DEST_SEARCH_DIRS"
+
+# Convert and validate each destination directory
+VALID_DEST_DIRS=()
+for dir in "${DEST_DIRS_ARRAY[@]}"; do
+    # Trim whitespace
+    dir=$(echo "$dir" | xargs)
+    # Convert Windows paths if needed
+    dir=$(convert_path "$dir")
+    
+    if [ -d "$dir" ]; then
+        VALID_DEST_DIRS+=("$dir")
+    else
+        echo "Warning: Destination directory does not exist, skipping: $dir"
+    fi
+done
+
+if [ ${#VALID_DEST_DIRS[@]} -eq 0 ]; then
+    echo "Error: No valid destination directories found in DEST_SEARCH_DIRS"
     exit 1
 fi
 
@@ -106,6 +123,28 @@ for repo_dir in "$TEMP_EXTRACT_DIR"/*; do
 done
 
 # =============================================================================
+# Repository Search Function
+# =============================================================================
+
+# Function to find a repository in the search directories
+# Returns the full path to the repo, or empty string if not found
+find_repo() {
+    local repo=$1
+    
+    for dir in "${VALID_DEST_DIRS[@]}"; do
+        local candidate="$dir/$repo"
+        if [ -d "$candidate/.git" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    
+    # Not found
+    echo ""
+    return 1
+}
+
+# =============================================================================
 # GitLab Remote Configuration
 # =============================================================================
 
@@ -144,7 +183,6 @@ configure_gitlab_remote() {
 apply_bundle() {
     local repo=$1
     local bundle_dir="$TEMP_EXTRACT_DIR/$repo"
-    local dest_repo_path="$DEST_BASE_DIR/$repo"
 
     print_subheader "Processing: $repo"
 
@@ -159,19 +197,21 @@ apply_bundle() {
     
     echo "Bundle: $(basename "$bundle_path")"
 
-    # Check if destination repository exists
-    if [ ! -d "$dest_repo_path" ]; then
-        echo "Error: Destination repository does not exist: $dest_repo_path"
-        echo "Please clone the repository first:"
-        echo "  cd $DEST_BASE_DIR"
-        echo "  git clone $(build_gitlab_url "$repo")"
+    # Find the repository in search directories
+    local dest_repo_path
+    dest_repo_path=$(find_repo "$repo")
+    
+    if [ -z "$dest_repo_path" ]; then
+        echo "Error: Repository '$repo' not found in any search directory:"
+        for dir in "${VALID_DEST_DIRS[@]}"; do
+            echo "  - $dir"
+        done
+        echo ""
+        echo "Please clone the repository first, then re-run this script."
         return 1
     fi
-
-    if [ ! -d "$dest_repo_path/.git" ]; then
-        echo "Error: Not a git repository: $dest_repo_path"
-        return 1
-    fi
+    
+    echo "Found at: $dest_repo_path"
 
     # Change to destination repository
     cd "$dest_repo_path" || return 1
@@ -242,7 +282,10 @@ apply_bundle() {
 # =============================================================================
 
 print_subheader "Configuration"
-echo "Destination directory: $DEST_BASE_DIR"
+echo "Destination directories:"
+for dir in "${VALID_DEST_DIRS[@]}"; do
+    echo "  - $dir"
+done
 echo "GitLab host: $GITLAB_HOST"
 echo "GitLab group: $GITLAB_GROUP"
 echo "Auth method: $GITLAB_AUTH_METHOD"

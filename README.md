@@ -40,11 +40,13 @@ This suite enables the synchronization of git repositories from a corporate envi
 
    ```bash
    # Source environment (where you create bundles)
-   SOURCE_BASE_DIR="/path/to/your/repos"
+   # Comma-separated list of directories to search for repos
+   SOURCE_SEARCH_DIRS="/path/to/your/repos"
    DEFAULT_BRANCHES="main,develop"
 
    # Destination environment (where you apply bundles)
-   DEST_BASE_DIR="/path/to/destination/repos"
+   # Comma-separated list of directories to search for repos
+   DEST_SEARCH_DIRS="/repos/main-group/project,/repos/main-group/other-project"
 
    # GitLab configuration (destination environment)
    GITLAB_HOST="gitlab.example.com"
@@ -166,25 +168,25 @@ No arguments needed - all configuration comes from `.env`.
 
 **Source Environment Variables:**
 
-| Variable            | Description                      | Example                          |
-| ------------------- | -------------------------------- | -------------------------------- |
-| `SOURCE_BASE_DIR`   | Parent directory of source repos | `/c/repos` or `/home/user/repos` |
-| `REPOS_LIST_FILE`   | File listing repos to process    | `repos.txt`                      |
-| `DEFAULT_BRANCHES`  | Branches to bundle by default    | `main,develop`                   |
-| `BUNDLE_OUTPUT_DIR` | Where to save bundles            | `bundles`                        |
-| `BUNDLE_LOOKBACK`   | How far back to include commits  | `1 month ago`                    |
+| Variable             | Description                                     | Example                   |
+| -------------------- | ----------------------------------------------- | ------------------------- |
+| `SOURCE_SEARCH_DIRS` | Comma-separated directories to search for repos | `/c/repos,/d/other-repos` |
+| `REPOS_LIST_FILE`    | File listing repos to process                   | `repos.txt`               |
+| `DEFAULT_BRANCHES`   | Branches to bundle by default                   | `main,develop`            |
+| `BUNDLE_OUTPUT_DIR`  | Where to save bundles                           | `bundles`                 |
+| `BUNDLE_LOOKBACK`    | How far back to include commits                 | `1 month ago`             |
 
 **Destination Environment Variables:**
 
-| Variable             | Description                           | Example                 |
-| -------------------- | ------------------------------------- | ----------------------- |
-| `DEST_BASE_DIR`      | Parent directory of destination repos | `/home/user/dest-repos` |
-| `GITLAB_HOST`        | GitLab server hostname                | `gitlab.example.com`    |
-| `GITLAB_GROUP`       | GitLab group/namespace                | `my-group`              |
-| `GITLAB_USERNAME`    | GitLab username                       | `john.doe`              |
-| `GITLAB_TOKEN`       | GitLab personal access token          | `glpat-xxxxxxxxxxxx`    |
-| `GITLAB_AUTH_METHOD` | `https` (default) or `ssh`            | `https`                 |
-| `ARCHIVE_INPUT_DIR`  | Where to look for archives (optional) | `/path/to/incoming`     |
+| Variable             | Description                                     | Example                                   |
+| -------------------- | ----------------------------------------------- | ----------------------------------------- |
+| `DEST_SEARCH_DIRS`   | Comma-separated directories to search for repos | `/repos/group/project,/repos/group/other` |
+| `GITLAB_HOST`        | GitLab server hostname                          | `gitlab.example.com`                      |
+| `GITLAB_GROUP`       | GitLab group/namespace                          | `my-group`                                |
+| `GITLAB_USERNAME`    | GitLab username                                 | `john.doe`                                |
+| `GITLAB_TOKEN`       | GitLab personal access token                    | `glpat-xxxxxxxxxxxx`                      |
+| `GITLAB_AUTH_METHOD` | `https` (default) or `ssh`                      | `https`                                   |
+| `ARCHIVE_INPUT_DIR`  | Where to look for archives (optional)           | `/path/to/incoming`                       |
 
 ### repos.txt
 

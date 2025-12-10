@@ -14,11 +14,11 @@
 #   ./create_bundles.sh -r repo -b main    # Single repo, specific branch
 #
 # Required .env variables:
-#   SOURCE_BASE_DIR  - Parent directory containing source repositories
-#   REPOS_LIST_FILE  - File listing repositories to process
-#   BUNDLE_OUTPUT_DIR - Where to save generated bundles
-#   DEFAULT_BRANCHES - Branches to bundle (can be overridden with -b)
-#   BUNDLE_LOOKBACK  - How far back to include commits (e.g., "1 month ago")
+#   SOURCE_SEARCH_DIRS - Comma-separated directories to search for repositories
+#   REPOS_LIST_FILE    - File listing repositories to process
+#   BUNDLE_OUTPUT_DIR  - Where to save generated bundles
+#   DEFAULT_BRANCHES   - Branches to bundle (can be overridden with -b)
+#   BUNDLE_LOOKBACK    - How far back to include commits (e.g., "1 month ago")
 #
 # Output:
 #   Creates timestamped .bundle files in BUNDLE_OUTPUT_DIR/<repo>/
@@ -34,16 +34,32 @@ source "$SCRIPT_DIR/common.sh"
 load_config
 
 # Validate required variables for this script
-validate_required_vars SOURCE_BASE_DIR REPOS_LIST_FILE BUNDLE_OUTPUT_DIR DEFAULT_BRANCHES BUNDLE_LOOKBACK
+validate_required_vars SOURCE_SEARCH_DIRS REPOS_LIST_FILE BUNDLE_OUTPUT_DIR DEFAULT_BRANCHES BUNDLE_LOOKBACK
 
-# Convert and resolve paths
-SOURCE_BASE_DIR=$(convert_path "$SOURCE_BASE_DIR")
+# Resolve paths
 REPOS_LIST_FILE=$(resolve_path "$REPOS_LIST_FILE")
 BUNDLE_OUTPUT_DIR=$(resolve_path "$BUNDLE_OUTPUT_DIR")
 
-# Validate that source directory exists
-if [ ! -d "$SOURCE_BASE_DIR" ]; then
-    echo "Error: SOURCE_BASE_DIR does not exist: $SOURCE_BASE_DIR"
+# Parse SOURCE_SEARCH_DIRS into an array
+IFS=',' read -ra SOURCE_DIRS_ARRAY <<< "$SOURCE_SEARCH_DIRS"
+
+# Convert and validate each source directory
+VALID_SOURCE_DIRS=()
+for dir in "${SOURCE_DIRS_ARRAY[@]}"; do
+    # Trim whitespace
+    dir=$(echo "$dir" | xargs)
+    # Convert Windows paths if needed
+    dir=$(convert_path "$dir")
+    
+    if [ -d "$dir" ]; then
+        VALID_SOURCE_DIRS+=("$dir")
+    else
+        echo "Warning: Source directory does not exist, skipping: $dir"
+    fi
+done
+
+if [ ${#VALID_SOURCE_DIRS[@]} -eq 0 ]; then
+    echo "Error: No valid source directories found in SOURCE_SEARCH_DIRS"
     exit 1
 fi
 
@@ -79,24 +95,44 @@ done
 # Convert comma-separated branches to space-separated
 BRANCHES=$(echo "$BRANCHES" | tr ',' ' ')
 
+# Function to find a repository in the search directories
+# Returns the full path to the repo, or empty string if not found
+find_repo() {
+    local repo=$1
+    
+    for dir in "${VALID_SOURCE_DIRS[@]}"; do
+        local candidate="$dir/$repo"
+        if [ -d "$candidate/.git" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    
+    # Not found
+    echo ""
+    return 1
+}
+
 # Function to process a single repository
 process_repo() {
     local repo=$1
-    local repo_path="$SOURCE_BASE_DIR/$repo"
     local bundle_dir="$BUNDLE_OUTPUT_DIR/$repo"
     
     print_subheader "Processing: $repo"
-    echo "Source path: $repo_path"
-
-    if [ ! -d "$repo_path" ]; then
-        echo "Error: Repository directory does not exist: $repo_path"
+    
+    # Find the repository in search directories
+    local repo_path
+    repo_path=$(find_repo "$repo")
+    
+    if [ -z "$repo_path" ]; then
+        echo "Error: Repository '$repo' not found in any search directory:"
+        for dir in "${VALID_SOURCE_DIRS[@]}"; do
+            echo "  - $dir"
+        done
         return 1
     fi
-
-    if [ ! -d "$repo_path/.git" ]; then
-        echo "Error: Not a git repository: $repo_path"
-        return 1
-    fi
+    
+    echo "Found at: $repo_path"
 
     # Remove old bundles for this repo
     if [ -d "$bundle_dir" ]; then
@@ -228,7 +264,10 @@ process_repo() {
 # =============================================================================
 
 print_header "Git Migration Suite - Create Bundles"
-echo "Source directory: $SOURCE_BASE_DIR"
+echo "Source directories:"
+for dir in "${VALID_SOURCE_DIRS[@]}"; do
+    echo "  - $dir"
+done
 echo "Output directory: $BUNDLE_OUTPUT_DIR"
 echo "Branches: $BRANCHES"
 echo "Lookback period: $BUNDLE_LOOKBACK"
