@@ -1,2 +1,12 @@
-# Add repo names here, one per line
-# example-repo
+# Git Migration Suite - Repository List
+# =============================================================================
+# Copy this file to repos.txt and configure for your repos
+# List repositories to process, one per line.
+# Lines starting with # are comments and will be ignored.
+# Empty lines are also ignored.
+# =============================================================================
+
+# Example repositories (replace with your actual repository names):
+# my-application
+# shared-library
+# infrastructure-config

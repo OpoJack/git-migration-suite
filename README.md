@@ -1,106 +1,346 @@
 # Git Migration Suite
 
-This project provides a set of scripts to automate the transfer of git repository updates between environments (e.g., from an internet-connected GitLab to a disconnected/air-gapped instance) using git bundles.
+A collection of bash scripts for migrating git repositories between isolated environments using git bundles.
 
-## Prerequisites
+## Overview
 
-- **Environment**: Linux/Unix-like environment with Bash (including Windows Git Bash).
-- **Dependencies**: `git` and `tar` must be installed (both are included with Git for Windows).
-- **Authentication**: SSH keys or credentials must be configured for non-interactive `git` operations (fetch/push).
-- **Directory Structure**:
-  - Source repositories must exist in `SOURCE_BASE_DIR` (defined in config).
-  - Destination repositories must exist in `DEST_BASE_DIR` (defined in config).
-  - Repository directory names must match the entries in `repos.txt`.
-- **Remotes**: Destination repositories must have an `origin` remote pointing to the target GitLab instance.
+This suite enables the synchronization of git repositories from a corporate environment to an isolated/air-gapped environment. It works by:
 
-## 🚀 Getting Started
+1. **Creating bundles** - Extracting recent commits and tags from source repositories into portable `.bundle` files
+2. **Packaging** - Combining all bundles into a single, transferable archive (optionally base64-encoded)
+3. **Applying bundles** - Importing the bundled changes into destination repositories and pushing to their remote
 
-### 1. Configuration
+```
+┌─────────────────────┐                      ┌─────────────────────┐
+│  Source Environment │                      │  Dest Environment   │
+│  (Corporate)        │                      │  (Isolated)         │
+│                     │                      │                     │
+│  ┌───────────────┐  │     Transfer         │  ┌───────────────┐  │
+│  │ Source Repos  │  │  ─────────────────►  │  │  Dest Repos   │  │
+│  │ (GitHub/etc)  │  │   .tar.gz.txt        │  │  (GitLab)     │  │
+│  └───────────────┘  │                      │  └───────────────┘  │
+│         │           │                      │         ▲           │
+│         ▼           │                      │         │           │
+│  create_bundles.sh  │                      │  apply_bundles.sh   │
+│  zip_bundles.sh     │                      │                     │
+└─────────────────────┘                      └─────────────────────┘
+```
 
-1. Copy `example.env` to `.env`:
+## Quick Start
+
+### Initial Setup
+
+1. **Clone or copy this suite** to both environments
+
+2. **Configure the environment**:
    ```bash
    cp example.env .env
    ```
-2. Edit `.env` to configure your environment:
-   - **SOURCE_BASE_DIR**: Local path to source repositories.
-   - **DEST_BASE_DIR**: Local path to destination repositories.
-   - **REPOS_LIST_FILE**: Path to the list of repositories (relative to project root, default: `repos.txt`).
-   - **DEFAULT_BRANCHES**: Comma-separated list of branches to bundle (e.g., `main,develop`).
+3. **Edit `.env`** with your paths:
 
-### 2. Repository List
+   ```bash
+   # Source environment (where you create bundles)
+   SOURCE_BASE_DIR="/path/to/your/repos"
+   DEFAULT_BRANCHES="main,develop"
 
-Populate `repos.txt` with the names of the repositories to process, one per line.
+   # Destination environment (where you apply bundles)
+   DEST_BASE_DIR="/path/to/destination/repos"
 
-```text
-my-awesome-service
-another-microservice
-```
+   # GitLab configuration (destination environment)
+   GITLAB_HOST="gitlab.example.com"
+   GITLAB_GROUP="my-group"
+   GITLAB_USERNAME="your-username"
+   GITLAB_TOKEN="glpat-your-token-here"
+   ```
 
-## 🛠️ Usage
+4. **Create `repos.txt`** listing your repositories:
+   ```
+   my-application
+   shared-library
+   another-repo
+   ```
 
-### Step 1: Create Bundles
-
-On the source environment, run the bundle script to generate incremental bundles for your repositories.
-
-```bash
-./scripts/bundle_repos.sh
-```
-
-_Options:_
-
-- `-r <repo>`: Process a specific repository.
-- `-b "<branch1> <branch2>"`: Override default branches.
-
-**Note**: Bundle files are created with timestamps in the format: `repo-name_YYYY-MM-DD_HH-MM_AM.bundle`
-
-### Step 2: Archive
-
-Create a timestamped tar.gz archive of the generated bundles for easy transfer.
+### In the Source Environment
 
 ```bash
+# Create bundles for all repositories
+./scripts/create_bundles.sh
+
+# Package bundles for transfer
 ./scripts/zip_bundles.sh
 ```
 
-**Note**: Archive files are created with timestamps in the format: `migration-suite-YYYY-MM-DD_HH-MM_AM.tar.gz`
+This creates `migration-suite_<timestamp>.tar.gz.txt` ready for transfer.
 
-### Step 3: Apply Changes
+### In the Destination Environment
 
-Transfer the tar.gz archive to the destination environment and run the apply script.
+```bash
+# Copy the .tar.gz.txt file to the destination environment
+# Then apply the bundles
+./scripts/apply_bundles.sh
+```
+
+## Scripts
+
+### create_bundles.sh
+
+Creates git bundles from source repositories.
+
+**Usage:**
+
+```bash
+./scripts/create_bundles.sh                      # All repos in repos.txt
+./scripts/create_bundles.sh -r my-repo           # Single repository
+./scripts/create_bundles.sh -b "main develop"    # Custom branches
+./scripts/create_bundles.sh -r my-repo -b main   # Combined options
+```
+
+**What it does:**
+
+- Fetches latest changes from all remotes
+- Creates incremental bundles (only commits from the lookback period)
+- Includes relevant tags that point to commits in the date range
+- Prioritizes remote-tracking branches (`origin/main`) over local branches
+
+**Output:**
+
+```
+bundles/
+├── my-application/
+│   └── my-application_2024-01-15_10-30-00.bundle
+├── shared-library/
+│   └── shared-library_2024-01-15_10-30-00.bundle
+```
+
+### zip_bundles.sh
+
+Packages all bundles into a single archive.
+
+**Usage:**
+
+```bash
+./scripts/zip_bundles.sh        # Create base64-encoded archive
+./scripts/zip_bundles.sh -k     # Keep .tar.gz file too
+./scripts/zip_bundles.sh -s     # Skip base64, output only .tar.gz
+```
+
+**Output:**
+
+- `migration-suite_<timestamp>.tar.gz.txt` - Base64-encoded archive (default)
+- `migration-suite_<timestamp>.tar.gz` - Plain archive (with `-s` or `-k`)
+
+The base64 encoding allows the archive to be transferred through text-only channels if needed.
+
+### apply_bundles.sh
+
+Applies bundles to destination repositories and pushes to GitLab.
+
+**Usage:**
 
 ```bash
 ./scripts/apply_bundles.sh
 ```
 
-_Options:_
+No arguments needed - all configuration comes from `.env`.
 
-- `-f <archive_file>`: Specify a specific tar.gz file (defaults to the latest found).
-- `-r <repo>`: Apply changes for a specific repository.
+**What it does:**
 
----
+1. Finds the latest archive in `ARCHIVE_INPUT_DIR` (or project root)
+2. Extracts the archive (handles both `.tar.gz` and `.tar.gz.txt`)
+3. For each repository:
+   - Verifies bundle integrity
+   - Fetches changes into the local repository
+   - Configures the `gitlab` remote with credentials from `.env`
+   - Pushes branches and tags to GitLab
+   - Cleans up temporary refs
 
-## 🔍 Technical Breakdown
+**Prerequisites:**
 
-### `scripts/bundle_repos.sh`
+- Destination repositories must already be cloned locally in `DEST_BASE_DIR`
+- GitLab personal access token with `write_repository` scope
+- `.env` configured with GitLab credentials
 
-- Iterates through repositories defined in `repos.txt`.
-- Performs a `git fetch --all --tags` on the source to ensure up-to-date refs.
-- Checks for the existence of target branches (`main`, `develop`, etc.) to avoid errors.
-- Runs `git bundle create` with `--since="1 month ago"` to capture recent history.
-- Explicitly includes tags in the bundle.
-- Creates timestamped bundle files for tracking and versioning.
+## Configuration
 
-### `scripts/zip_bundles.sh`
+### .env File
 
-- Compresses the `bundles/` directory into a single tar.gz file named `migration-suite-<timestamp>.tar.gz`.
-- Uses `tar` for cross-platform compatibility (works on Linux, macOS, and Windows Git Bash).
-- Ensures the directory structure is preserved for the apply script.
+**Source Environment Variables:**
 
-### `scripts/apply_bundles.sh`
+| Variable            | Description                      | Example                          |
+| ------------------- | -------------------------------- | -------------------------------- |
+| `SOURCE_BASE_DIR`   | Parent directory of source repos | `/c/repos` or `/home/user/repos` |
+| `REPOS_LIST_FILE`   | File listing repos to process    | `repos.txt`                      |
+| `DEFAULT_BRANCHES`  | Branches to bundle by default    | `main,develop`                   |
+| `BUNDLE_OUTPUT_DIR` | Where to save bundles            | `bundles`                        |
+| `BUNDLE_LOOKBACK`   | How far back to include commits  | `1 month ago`                    |
 
-- Extracts the provided tar.gz archive.
-- Automatically detects timestamped bundle files within each repository directory.
-- For each repository:
-  1. Verifies the bundle integrity using `git bundle verify`.
-  2. Fetches bundle refs into a temporary namespace `refs/remotes/bundle-source/*` to avoid conflicts with local checked-out branches.
-  3. Pushes tags to `origin`.
-  4. Pushes updated branches from `refs/remotes/bundle-source/*` to `refs/heads/*` on `origin`.
+**Destination Environment Variables:**
+
+| Variable             | Description                           | Example                 |
+| -------------------- | ------------------------------------- | ----------------------- |
+| `DEST_BASE_DIR`      | Parent directory of destination repos | `/home/user/dest-repos` |
+| `GITLAB_HOST`        | GitLab server hostname                | `gitlab.example.com`    |
+| `GITLAB_GROUP`       | GitLab group/namespace                | `my-group`              |
+| `GITLAB_USERNAME`    | GitLab username                       | `john.doe`              |
+| `GITLAB_TOKEN`       | GitLab personal access token          | `glpat-xxxxxxxxxxxx`    |
+| `GITLAB_AUTH_METHOD` | `https` (default) or `ssh`            | `https`                 |
+| `ARCHIVE_INPUT_DIR`  | Where to look for archives (optional) | `/path/to/incoming`     |
+
+### repos.txt
+
+One repository name per line. Comments start with `#`:
+
+```
+# Production applications
+my-application
+api-service
+
+# Shared libraries
+shared-library
+common-utils
+```
+
+## Directory Structure
+
+```
+git-migration-suite/
+├── .env                    # Your configuration (create from example.env)
+├── example.env             # Template configuration
+├── repos.txt               # List of repositories to process
+├── README.md               # This file
+├── scripts/
+│   ├── common.sh           # Shared functions
+│   ├── create_bundles.sh   # Bundle creation script
+│   ├── zip_bundles.sh      # Archive packaging script
+│   └── apply_bundles.sh    # Bundle application script
+└── bundles/                # Generated bundles (created automatically)
+    ├── repo1/
+    │   └── repo1_2024-01-15_10-30-00.bundle
+    └── repo2/
+        └── repo2_2024-01-15_10-30-00.bundle
+```
+
+## Workflow Examples
+
+### Regular Sync (Weekly/Monthly)
+
+```bash
+# Source environment
+cd /path/to/git-migration-suite
+./scripts/create_bundles.sh
+./scripts/zip_bundles.sh
+
+# Transfer migration-suite_*.tar.gz.txt to destination
+
+# Destination environment
+cd /path/to/git-migration-suite
+# Place the .tar.gz.txt file in the project root (or ARCHIVE_INPUT_DIR)
+./scripts/apply_bundles.sh
+```
+
+### First-Time Setup in Destination Environment
+
+Before running `apply_bundles.sh` for the first time, you need to clone all repositories:
+
+```bash
+cd /path/to/dest_repos
+
+# Clone each repository (the script will configure the gitlab remote)
+git clone https://gitlab.example.com/my-group/repo-name.git
+# Repeat for each repository...
+```
+
+Or if starting fresh, you can clone from the bundle itself (advanced):
+
+```bash
+git clone /path/to/repo.bundle repo-name
+cd repo-name
+git remote add gitlab https://user:token@gitlab.example.com/group/repo-name.git
+```
+
+### Single Repository Sync
+
+```bash
+# Create bundle for just one repo
+./scripts/create_bundles.sh -r my-critical-repo
+
+# Package it
+./scripts/zip_bundles.sh
+
+# Apply on destination
+./scripts/apply_bundles.sh -r my-critical-repo
+```
+
+### Custom Branch Set
+
+```bash
+# Bundle specific branches
+./scripts/create_bundles.sh -b "main release/v2.0 hotfix/urgent"
+```
+
+### Full History (First-Time Migration)
+
+For initial migration, you may want all history. Set a very long lookback:
+
+```bash
+# In .env, temporarily set:
+BUNDLE_LOOKBACK="10 years ago"
+
+# Or override for this run by editing .env temporarily
+```
+
+## Troubleshooting
+
+### "Bundle verification failed"
+
+This usually means the destination repository is missing commits that the bundle depends on. Solutions:
+
+1. **Create a full bundle** (longer lookback period)
+2. **Ensure destination has base commits** - Clone fresh if needed
+3. **Check for force-pushes** in source that rewrote history
+
+### "No commits found in lookback period"
+
+The branch hasn't been updated recently. This is informational, not an error.
+
+### "Repository directory does not exist"
+
+- Check `SOURCE_BASE_DIR` or `DEST_BASE_DIR` in `.env`
+- Ensure the repository is cloned in both environments
+- Check for typos in `repos.txt`
+
+### Windows/Git Bash Path Issues
+
+The scripts automatically convert Windows paths (`C:\path`) to Git Bash format (`/c/path`). If you still have issues:
+
+- Use forward slashes in `.env`
+- Use Git Bash-style paths: `/c/Users/name/repos`
+
+### Base64 Decode Fails
+
+If `apply_bundles.sh` fails to decode:
+
+- Ensure the file wasn't corrupted during transfer
+- Check for line ending issues (should be Unix-style)
+- Try transferring the `.tar.gz` directly with `-s` flag
+
+## Platform Compatibility
+
+| Platform           | create_bundles | zip_bundles | apply_bundles |
+| ------------------ | -------------- | ----------- | ------------- |
+| Linux              | ✅             | ✅          | ✅            |
+| macOS              | ✅             | ✅          | ✅            |
+| Git Bash (Windows) | ✅             | ✅          | ✅            |
+| WSL                | ✅             | ✅          | ✅            |
+
+## Notes
+
+- **Bundles are incremental** - Only recent commits (per `BUNDLE_LOOKBACK`) are included to keep bundle sizes small
+- **Tags are filtered** - Only tags pointing to commits within the lookback period are included
+- **Remote branches preferred** - The scripts use `origin/branch` when available to ensure you're bundling the latest fetched state
+- **Safe operations** - The scripts don't modify source repositories; they only read from them
+- **Destination must exist** - Repositories must be cloned in the destination environment before applying bundles
+
+## License
+
+Internal use only.

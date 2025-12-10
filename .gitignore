@@ -2,3 +2,6 @@
 bundles/
 *.zip
 repos.txt
+*.tar.gz
+migration-suite*.txt
+images/
