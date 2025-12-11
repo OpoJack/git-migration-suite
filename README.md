@@ -158,9 +158,103 @@ No arguments needed - all configuration comes from `.env`.
 
 **Prerequisites:**
 
-- Destination repositories must already be cloned locally in `DEST_BASE_DIR`
+- Destination repositories must already be cloned locally (use `init_repos.sh` for first-time setup)
 - GitLab personal access token with `write_repository` scope
 - `.env` configured with GitLab credentials
+
+### init_repos.sh
+
+Initializes local repositories from bundles for first-time setup.
+
+**Usage:**
+
+```bash
+./scripts/init_repos.sh
+```
+
+No arguments needed - all configuration comes from `.env`.
+
+**What it does:**
+
+1. Finds the latest archive in `ARCHIVE_INPUT_DIR` (or project root)
+2. Extracts the archive
+3. For each bundle:
+   - Clones the bundle to `INIT_DEST_DIR/<repo>`
+   - Configures `gitlab` and `origin` remotes with credentials
+   - Skips repos that already exist locally
+
+**After running:**
+
+1. Add the repository names to `repos.txt`
+2. Add `INIT_DEST_DIR` to `DEST_SEARCH_DIRS` in `.env`
+3. Run `apply_bundles.sh` to push to GitLab
+
+**Prerequisites:**
+
+- GitLab repositories must already exist (can be empty)
+- GitLab personal access token with `write_repository` scope
+
+### docker_export.sh
+
+Exports Docker images from Harbor registry for transfer.
+
+**Usage:**
+
+```bash
+./scripts/docker_export.sh
+```
+
+No arguments needed - reads from `docker-images.conf` and `.env`.
+
+**What it does:**
+
+1. Reads image list from `docker-images.conf`
+2. For each image:
+   - Pulls from Harbor registry
+   - Saves to tar file
+   - Base64 encodes to `.txt` file
+   - Cleans up intermediate tar
+
+**Config file (`docker-images.conf`):**
+
+```
+# Format: project/image:tag (registry from .env is prepended)
+myproject/webapp:v1.2.3
+myproject/webapp:latest
+# myproject/old-app:v1.0.0  (commented = skipped)
+```
+
+**Prerequisites:**
+
+- Docker installed and running
+- Logged in to Harbor (`docker login harbor.company.com`)
+
+### docker_upload.sh
+
+Imports Docker images and pushes to GitLab Container Registry.
+
+**Usage:**
+
+```bash
+./scripts/docker_upload.sh
+```
+
+No arguments needed - reads `.tar.gz.txt` files from `DOCKER_INPUT_DIR`.
+
+**What it does:**
+
+1. Logs in to GitLab registry using credentials from `.env`
+2. For each `.tar.gz.txt` file in `DOCKER_INPUT_DIR`:
+   - Base64 decodes the file
+   - Decompresses with gunzip
+   - Loads image into Docker
+   - Tags for GitLab registry
+   - Pushes to GitLab
+
+**Prerequisites:**
+
+- Docker installed and running
+- GitLab token with `read_registry` and `write_registry` scope
 
 ## Configuration
 
@@ -176,17 +270,33 @@ No arguments needed - all configuration comes from `.env`.
 | `BUNDLE_OUTPUT_DIR`  | Where to save bundles                           | `bundles`                 |
 | `BUNDLE_LOOKBACK`    | How far back to include commits                 | `1 month ago`             |
 
+**Docker Image Variables (Source):**
+
+| Variable            | Description                   | Example              |
+| ------------------- | ----------------------------- | -------------------- |
+| `HARBOR_REGISTRY`   | Source Harbor registry URL    | `harbor.company.com` |
+| `DOCKER_OUTPUT_DIR` | Where to save exported images | `images`             |
+
+**Docker Image Variables (Destination):**
+
+| Variable               | Description                      | Example              |
+| ---------------------- | -------------------------------- | -------------------- |
+| `GITLAB_REGISTRY`      | GitLab container registry URL    | `gitlab.company.com` |
+| `GITLAB_REGISTRY_PATH` | Path to umbrella repo for images | `group/project/repo` |
+| `DOCKER_INPUT_DIR`     | Where to find images to import   | `images`             |
+
 **Destination Environment Variables:**
 
-| Variable             | Description                                     | Example                                   |
-| -------------------- | ----------------------------------------------- | ----------------------------------------- |
-| `DEST_SEARCH_DIRS`   | Comma-separated directories to search for repos | `/repos/group/project,/repos/group/other` |
-| `GITLAB_HOST`        | GitLab server hostname                          | `gitlab.example.com`                      |
-| `GITLAB_GROUP`       | GitLab group/namespace                          | `my-group`                                |
-| `GITLAB_USERNAME`    | GitLab username                                 | `john.doe`                                |
-| `GITLAB_TOKEN`       | GitLab personal access token                    | `glpat-xxxxxxxxxxxx`                      |
-| `GITLAB_AUTH_METHOD` | `https` (default) or `ssh`                      | `https`                                   |
-| `ARCHIVE_INPUT_DIR`  | Where to look for archives (optional)           | `/path/to/incoming`                       |
+| Variable             | Description                                          | Example                                   |
+| -------------------- | ---------------------------------------------------- | ----------------------------------------- |
+| `DEST_SEARCH_DIRS`   | Comma-separated directories to search for repos      | `/repos/group/project,/repos/group/other` |
+| `INIT_DEST_DIR`      | Directory where new repos are cloned (init_repos.sh) | `/repos/new-imports`                      |
+| `GITLAB_HOST`        | GitLab server hostname                               | `gitlab.example.com`                      |
+| `GITLAB_GROUP`       | GitLab group/namespace                               | `my-group`                                |
+| `GITLAB_USERNAME`    | GitLab username                                      | `john.doe`                                |
+| `GITLAB_TOKEN`       | GitLab personal access token                         | `glpat-xxxxxxxxxxxx`                      |
+| `GITLAB_AUTH_METHOD` | `https` (default) or `ssh`                           | `https`                                   |
+| `ARCHIVE_INPUT_DIR`  | Where to look for archives (optional)                | `/path/to/incoming`                       |
 
 ### repos.txt
 
@@ -208,18 +318,25 @@ common-utils
 git-migration-suite/
 ├── .env                    # Your configuration (create from example.env)
 ├── example.env             # Template configuration
-├── repos.txt               # List of repositories to process
+├── repos.txt               # List of git repositories to process
+├── docker-images.conf      # List of Docker images to export
 ├── README.md               # This file
 ├── scripts/
 │   ├── common.sh           # Shared functions
 │   ├── create_bundles.sh   # Bundle creation script
 │   ├── zip_bundles.sh      # Archive packaging script
-│   └── apply_bundles.sh    # Bundle application script
-└── bundles/                # Generated bundles (created automatically)
-    ├── repo1/
-    │   └── repo1_2024-01-15_10-30-00.bundle
-    └── repo2/
-        └── repo2_2024-01-15_10-30-00.bundle
+│   ├── init_repos.sh       # First-time repository setup
+│   ├── apply_bundles.sh    # Bundle application script
+│   ├── docker_export.sh    # Docker image export script
+│   └── docker_upload.sh    # Docker image import script
+├── bundles/                # Generated git bundles (created automatically)
+│   ├── repo1/
+│   │   └── repo1_2024-01-15_10-30-00.bundle
+│   └── repo2/
+│       └── repo2_2024-01-15_10-30-00.bundle
+└── images/                 # Exported Docker images (created automatically)
+    ├── myproject_webapp_v1.2.3.tar.txt
+    └── myproject_webapp_latest.tar.txt
 ```
 
 ## Workflow Examples
@@ -242,22 +359,30 @@ cd /path/to/git-migration-suite
 
 ### First-Time Setup in Destination Environment
 
-Before running `apply_bundles.sh` for the first time, you need to clone all repositories:
+Use `init_repos.sh` to create local repositories from bundles:
+
+```bash
+cd /path/to/git-migration-suite
+
+# Place the .tar.gz.txt file in the project root
+# Then initialize repositories from the bundles
+./scripts/init_repos.sh
+
+# The script will output next steps, but generally:
+# 1. Add repo names to repos.txt
+# 2. Add INIT_DEST_DIR to DEST_SEARCH_DIRS in .env
+# 3. Push to GitLab
+./scripts/apply_bundles.sh
+```
+
+Alternatively, if GitLab already has the repositories and you want to clone from there:
 
 ```bash
 cd /path/to/dest_repos
 
-# Clone each repository (the script will configure the gitlab remote)
+# Clone each repository from GitLab
 git clone https://gitlab.example.com/my-group/repo-name.git
 # Repeat for each repository...
-```
-
-Or if starting fresh, you can clone from the bundle itself (advanced):
-
-```bash
-git clone /path/to/repo.bundle repo-name
-cd repo-name
-git remote add gitlab https://user:token@gitlab.example.com/group/repo-name.git
 ```
 
 ### Single Repository Sync
