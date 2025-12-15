@@ -94,7 +94,8 @@ Creates git bundles from source repositories.
 ./scripts/create_bundles.sh                      # All repos in repos.txt
 ./scripts/create_bundles.sh -r my-repo           # Single repository
 ./scripts/create_bundles.sh -b "main develop"    # Custom branches
-./scripts/create_bundles.sh -r my-repo -b main   # Combined options
+./scripts/create_bundles.sh --no-lfs             # Skip LFS objects
+./scripts/create_bundles.sh --lfs-current        # Only LFS for current checkout
 ```
 
 **What it does:**
@@ -102,6 +103,7 @@ Creates git bundles from source repositories.
 - Fetches latest changes from all remotes
 - Creates incremental bundles (only commits from the lookback period)
 - Includes relevant tags that point to commits in the date range
+- Exports Git LFS objects (default: all history)
 - Prioritizes remote-tracking branches (`origin/main`) over local branches
 
 **Output:**
@@ -109,9 +111,9 @@ Creates git bundles from source repositories.
 ```
 bundles/
 ├── my-application/
-│   └── my-application_2024-01-15_10-30-00.bundle
-├── shared-library/
-│   └── shared-library_2024-01-15_10-30-00.bundle
+│   ├── my-application_2024-01-15_10-30-00.bundle
+│   └── lfs/           # LFS objects (if repo uses LFS)
+│       └── ...
 ```
 
 ### zip_bundles.sh
@@ -140,7 +142,8 @@ Applies bundles to destination repositories and pushes to GitLab.
 **Usage:**
 
 ```bash
-./scripts/apply_bundles.sh
+./scripts/apply_bundles.sh            # Apply bundles with LFS
+./scripts/apply_bundles.sh --no-lfs   # Skip LFS import/push
 ```
 
 No arguments needed - all configuration comes from `.env`.
@@ -152,8 +155,9 @@ No arguments needed - all configuration comes from `.env`.
 3. For each repository:
    - Verifies bundle integrity
    - Fetches changes into the local repository
+   - Imports LFS objects if present
    - Configures the `gitlab` remote with credentials from `.env`
-   - Pushes branches and tags to GitLab
+   - Pushes branches, tags, and LFS objects to GitLab
    - Cleans up temporary refs
 
 **Prerequisites:**
@@ -161,6 +165,7 @@ No arguments needed - all configuration comes from `.env`.
 - Destination repositories must already be cloned locally (use `init_repos.sh` for first-time setup)
 - GitLab personal access token with `write_repository` scope
 - `.env` configured with GitLab credentials
+- Git LFS installed if repositories use LFS
 
 ### init_repos.sh
 
@@ -169,7 +174,8 @@ Initializes local repositories from bundles for first-time setup.
 **Usage:**
 
 ```bash
-./scripts/init_repos.sh
+./scripts/init_repos.sh              # Initialize with LFS
+./scripts/init_repos.sh --no-lfs     # Skip LFS import
 ```
 
 No arguments needed - all configuration comes from `.env`.
@@ -181,6 +187,7 @@ No arguments needed - all configuration comes from `.env`.
 3. For each bundle:
    - Clones the bundle to `INIT_DEST_DIR/<repo>`
    - Configures `gitlab` and `origin` remotes with credentials
+   - Imports LFS objects if present
    - Skips repos that already exist locally
 
 **After running:**
@@ -193,6 +200,7 @@ No arguments needed - all configuration comes from `.env`.
 
 - GitLab repositories must already exist (can be empty)
 - GitLab personal access token with `write_repository` scope
+- Git LFS installed if repositories use LFS
 
 ### docker_export.sh
 
@@ -229,14 +237,14 @@ myproject/webapp:latest
 - Docker installed and running
 - Logged in to Harbor (`docker login harbor.company.com`)
 
-### docker_upload.sh
+### docker_import.sh
 
 Imports Docker images and pushes to GitLab Container Registry.
 
 **Usage:**
 
 ```bash
-./scripts/docker_upload.sh
+./scripts/docker_import.sh
 ```
 
 No arguments needed - reads `.tar.gz.txt` files from `DOCKER_INPUT_DIR`.
@@ -328,10 +336,12 @@ git-migration-suite/
 │   ├── init_repos.sh       # First-time repository setup
 │   ├── apply_bundles.sh    # Bundle application script
 │   ├── docker_export.sh    # Docker image export script
-│   └── docker_upload.sh    # Docker image import script
+│   └── docker_import.sh    # Docker image import script
 ├── bundles/                # Generated git bundles (created automatically)
 │   ├── repo1/
-│   │   └── repo1_2024-01-15_10-30-00.bundle
+│   │   ├── repo1_2024-01-15_10-30-00.bundle
+│   │   └── lfs/            # LFS objects (if repo uses LFS)
+│   │       └── ...
 │   └── repo2/
 │       └── repo2_2024-01-15_10-30-00.bundle
 └── images/                 # Exported Docker images (created automatically)
@@ -467,6 +477,32 @@ If `apply_bundles.sh` fails to decode:
 - **Remote branches preferred** - The scripts use `origin/branch` when available to ensure you're bundling the latest fetched state
 - **Safe operations** - The scripts don't modify source repositories; they only read from them
 - **Destination must exist** - Repositories must be cloned in the destination environment before applying bundles
+
+## Git LFS Support
+
+The migration suite fully supports Git LFS (Large File Storage):
+
+**Export (create_bundles.sh):**
+
+- Automatically detects if a repository uses LFS
+- Fetches all LFS objects by default (`git lfs fetch --all`)
+- Exports LFS objects to `bundles/<repo>/lfs/`
+- Use `--no-lfs` to skip LFS export
+- Use `--lfs-current` to only fetch LFS for current checkout (faster, but incomplete history)
+
+**Import (apply_bundles.sh / init_repos.sh):**
+
+- Automatically imports LFS objects if present in the bundle
+- Copies objects to `.git/lfs/objects/`
+- Pushes LFS objects to GitLab with `git lfs push --all`
+- Use `--no-lfs` to skip LFS import/push
+
+**Requirements:**
+
+- Git LFS must be installed on both source and destination machines
+- GitLab must have LFS enabled for the project
+
+**Note:** LFS objects are stored per-repository in the bundle. If multiple repos share the same LFS files, they will be duplicated in the archive.
 
 ## License
 

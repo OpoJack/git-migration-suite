@@ -5,10 +5,11 @@
 # Purpose:
 #   Creates local repository clones from bundles for first-time setup in the
 #   destination environment. Use this when you don't have local copies of the
-#   repositories yet.
+#   repositories yet. Also imports LFS objects if present.
 #
 # Usage:
-#   ./init_repos.sh
+#   ./init_repos.sh              # Initialize repos with LFS
+#   ./init_repos.sh --no-lfs     # Skip LFS import
 #
 # Required .env variables:
 #   INIT_DEST_DIR      - Directory where repositories will be cloned
@@ -24,6 +25,7 @@
 # Prerequisites:
 #   - GitLab repositories must already exist (can be empty)
 #   - GitLab personal access token with write_repository scope
+#   - Git LFS installed if repositories use LFS
 #
 # Next Steps:
 #   After running this script:
@@ -45,6 +47,30 @@ validate_required_vars INIT_DEST_DIR GITLAB_HOST GITLAB_GROUP GITLAB_USERNAME GI
 # Set defaults for optional variables
 GITLAB_AUTH_METHOD="${GITLAB_AUTH_METHOD:-https}"
 ARCHIVE_INPUT_DIR="${ARCHIVE_INPUT_DIR:-$PROJECT_ROOT}"
+
+# Default: include LFS
+INCLUDE_LFS=true
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --no-lfs)
+            INCLUDE_LFS=false
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--no-lfs]"
+            echo "  --no-lfs    Skip LFS import (default: include LFS)"
+            echo "  -h, --help  Show this help message"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            echo "Usage: $0 [--no-lfs]" >&2
+            exit 1
+            ;;
+    esac
+done
 
 # Resolve paths
 INIT_DEST_DIR=$(convert_path "$INIT_DEST_DIR")
@@ -103,7 +129,11 @@ echo "Extracted to temporary directory"
 echo "Repositories in archive:"
 for repo_dir in "$TEMP_EXTRACT_DIR"/*; do
     if [ -d "$repo_dir" ]; then
-        echo "  - $(basename "$repo_dir")"
+        local_lfs=""
+        if [ -d "$repo_dir/lfs" ]; then
+            local_lfs=" (includes LFS)"
+        fi
+        echo "  - $(basename "$repo_dir")$local_lfs"
     fi
 done
 
@@ -124,12 +154,40 @@ build_gitlab_url() {
 }
 
 # =============================================================================
+# LFS Functions
+# =============================================================================
+
+# Import LFS objects from the bundle's lfs directory
+import_lfs_objects() {
+    local lfs_source_dir=$1
+    
+    if [ ! -d "$lfs_source_dir" ]; then
+        return 0
+    fi
+    
+    echo "  Importing LFS objects..."
+    
+    # Ensure .git/lfs/objects exists
+    mkdir -p .git/lfs/objects
+    
+    # Copy LFS objects preserving directory structure
+    cp -r "$lfs_source_dir"/* .git/lfs/objects/
+    
+    local lfs_count
+    lfs_count=$(find "$lfs_source_dir" -type f | wc -l)
+    echo "  Imported $lfs_count LFS object(s)"
+    
+    return 0
+}
+
+# =============================================================================
 # Repository Initialization Function
 # =============================================================================
 
 init_repo() {
     local repo=$1
     local bundle_dir="$TEMP_EXTRACT_DIR/$repo"
+    local lfs_dir="$bundle_dir/lfs"
     local dest_repo_path="$INIT_DEST_DIR/$repo"
 
     print_subheader "Initializing: $repo"
@@ -144,6 +202,15 @@ init_repo() {
     fi
     
     echo "Bundle: $(basename "$bundle_path")"
+    
+    # Check for LFS objects
+    local has_lfs=false
+    if [ -d "$lfs_dir" ] && [ -n "$(ls -A "$lfs_dir" 2>/dev/null)" ]; then
+        has_lfs=true
+        echo "LFS objects: yes"
+    else
+        echo "LFS objects: no"
+    fi
 
     # Check if destination already exists
     if [ -d "$dest_repo_path" ]; then
@@ -185,7 +252,15 @@ init_repo() {
     git remote add origin "$gitlab_url" 2>/dev/null || git remote set-url origin "$gitlab_url"
     echo "  Set 'origin' to GitLab"
 
-    # Step 5: Set up tracking for the default branch
+    # Step 5: Import LFS objects if present
+    if [ "$INCLUDE_LFS" = true ] && [ "$has_lfs" = true ]; then
+        echo "Step 5: Importing LFS objects..."
+        import_lfs_objects "$lfs_dir"
+    else
+        echo "Step 5: LFS import skipped"
+    fi
+
+    # Step 6: Set up tracking for the default branch
     local default_branch
     default_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "main")
     echo "  Default branch: $default_branch"
@@ -203,6 +278,7 @@ echo "Destination directory: $INIT_DEST_DIR"
 echo "GitLab host: $GITLAB_HOST"
 echo "GitLab group: $GITLAB_GROUP"
 echo "Auth method: $GITLAB_AUTH_METHOD"
+echo "Include LFS: $INCLUDE_LFS"
 
 success_count=0
 skip_count=0

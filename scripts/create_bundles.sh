@@ -4,14 +4,16 @@
 # =============================================================================
 # Purpose:
 #   Creates git bundles from source repositories for transfer to an isolated
-#   environment. Bundles contain recent commits (based on BUNDLE_LOOKBACK) and
-#   relevant tags.
+#   environment. Bundles contain recent commits (based on BUNDLE_LOOKBACK),
+#   relevant tags, and Git LFS objects.
 #
 # Usage:
 #   ./create_bundles.sh                    # Process all repos in REPOS_LIST_FILE
 #   ./create_bundles.sh -r repo_name       # Process a single repository
 #   ./create_bundles.sh -b "main develop"  # Override default branches
 #   ./create_bundles.sh -r repo -b main    # Single repo, specific branch
+#   ./create_bundles.sh --no-lfs           # Skip LFS objects
+#   ./create_bundles.sh --lfs-current      # Only fetch LFS for current checkout
 #
 # Required .env variables:
 #   SOURCE_SEARCH_DIRS - Comma-separated directories to search for repositories
@@ -22,6 +24,7 @@
 #
 # Output:
 #   Creates timestamped .bundle files in BUNDLE_OUTPUT_DIR/<repo>/
+#   Creates lfs/ directory with LFS objects if repo uses LFS
 # =============================================================================
 
 set -e
@@ -72,22 +75,41 @@ fi
 # Default values
 REPO_NAME=""
 BRANCHES="$DEFAULT_BRANCHES"
+INCLUDE_LFS=true
+LFS_FETCH_ALL=true
 
 # Parse arguments
-while getopts "r:b:h" opt; do
-    case $opt in
-        r) REPO_NAME="$OPTARG" ;;
-        b) BRANCHES="$OPTARG" ;;
-        h) 
-            echo "Usage: $0 [-r repo_name] [-b \"branch1 branch2\"]"
-            echo "  -r  Process a single repository"
-            echo "  -b  Override default branches (comma or space separated)"
-            echo "  -h  Show this help message"
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -r)
+            REPO_NAME="$2"
+            shift 2
+            ;;
+        -b)
+            BRANCHES="$2"
+            shift 2
+            ;;
+        --no-lfs)
+            INCLUDE_LFS=false
+            shift
+            ;;
+        --lfs-current)
+            LFS_FETCH_ALL=false
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: $0 [-r repo_name] [-b \"branch1 branch2\"] [--no-lfs] [--lfs-current]"
+            echo "  -r            Process a single repository"
+            echo "  -b            Override default branches (comma or space separated)"
+            echo "  --no-lfs      Skip LFS objects (default: include LFS)"
+            echo "  --lfs-current Only fetch LFS for current checkout (default: fetch all)"
+            echo "  -h, --help    Show this help message"
             exit 0
             ;;
-        *) 
-            echo "Usage: $0 [-r repo_name] [-b \"branch1 branch2\"]" >&2
-            exit 1 
+        *)
+            echo "Unknown option: $1" >&2
+            echo "Usage: $0 [-r repo_name] [-b \"branch1 branch2\"] [--no-lfs] [--lfs-current]" >&2
+            exit 1
             ;;
     esac
 done
@@ -113,6 +135,62 @@ find_repo() {
     return 1
 }
 
+# Function to check if a repo uses LFS
+repo_uses_lfs() {
+    # Check if .gitattributes contains LFS filters
+    if [ -f ".gitattributes" ] && grep -q "filter=lfs" ".gitattributes" 2>/dev/null; then
+        return 0
+    fi
+    # Also check if there's an lfs directory with objects
+    if [ -d ".git/lfs/objects" ] && [ -n "$(ls -A .git/lfs/objects 2>/dev/null)" ]; then
+        return 0
+    fi
+    return 1
+}
+
+# Function to export LFS objects
+export_lfs_objects() {
+    local repo=$1
+    local bundle_dir=$2
+    local lfs_dir="$bundle_dir/lfs"
+    
+    echo "Exporting LFS objects..."
+    
+    # Fetch LFS objects
+    if [ "$LFS_FETCH_ALL" = true ]; then
+        echo "  Fetching all LFS objects (this may take a while)..."
+        if ! git lfs fetch --all 2>&1; then
+            echo "  Warning: git lfs fetch --all failed, trying without --all"
+            git lfs fetch 2>&1 || true
+        fi
+    else
+        echo "  Fetching LFS objects for current checkout..."
+        git lfs fetch 2>&1 || true
+    fi
+    
+    # Check if there are any LFS objects to copy
+    if [ ! -d ".git/lfs/objects" ] || [ -z "$(ls -A .git/lfs/objects 2>/dev/null)" ]; then
+        echo "  No LFS objects found to export"
+        return 0
+    fi
+    
+    # Create LFS output directory
+    mkdir -p "$lfs_dir"
+    
+    # Copy LFS objects preserving directory structure
+    echo "  Copying LFS objects..."
+    cp -r .git/lfs/objects/* "$lfs_dir/"
+    
+    # Count and report
+    local lfs_count
+    lfs_count=$(find "$lfs_dir" -type f | wc -l)
+    local lfs_size
+    lfs_size=$(du -sh "$lfs_dir" 2>/dev/null | cut -f1)
+    echo "  Exported $lfs_count LFS object(s) ($lfs_size)"
+    
+    return 0
+}
+
 # Function to process a single repository
 process_repo() {
     local repo=$1
@@ -134,10 +212,10 @@ process_repo() {
     
     echo "Found at: $repo_path"
 
-    # Remove old bundles for this repo
+    # Remove old bundles and LFS for this repo
     if [ -d "$bundle_dir" ]; then
         echo "Removing old bundles in $bundle_dir..."
-        rm -f "$bundle_dir"/*.bundle
+        rm -rf "$bundle_dir"
     fi
 
     # Create output directory
@@ -242,6 +320,17 @@ process_repo() {
             echo "No commits found in lookback period for $repo. Skipping bundle creation."
             exit 2
         fi
+        
+        # Handle LFS objects
+        if [ "$INCLUDE_LFS" = true ]; then
+            if repo_uses_lfs; then
+                export_lfs_objects "$repo" "$bundle_dir"
+            else
+                echo "No LFS configuration detected for $repo"
+            fi
+        else
+            echo "LFS export skipped (--no-lfs flag)"
+        fi
     )
     
     local subshell_exit=$?
@@ -271,6 +360,8 @@ done
 echo "Output directory: $BUNDLE_OUTPUT_DIR"
 echo "Branches: $BRANCHES"
 echo "Lookback period: $BUNDLE_LOOKBACK"
+echo "Include LFS: $INCLUDE_LFS"
+[ "$INCLUDE_LFS" = true ] && echo "LFS fetch mode: $([ "$LFS_FETCH_ALL" = true ] && echo "all history" || echo "current checkout only")"
 
 if [ -n "$REPO_NAME" ]; then
     # Process single repository

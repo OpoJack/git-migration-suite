@@ -9,11 +9,13 @@
 #     2. Extracts bundle from the archive
 #     3. Verifies bundle integrity
 #     4. Fetches changes into the local repository
-#     5. Configures GitLab remote with credentials
-#     6. Pushes branches and tags to GitLab
+#     5. Imports LFS objects if present
+#     6. Configures GitLab remote with credentials
+#     7. Pushes branches, tags, and LFS objects to GitLab
 #
 # Usage:
-#   ./apply_bundles.sh
+#   ./apply_bundles.sh                # Apply bundles with LFS
+#   ./apply_bundles.sh --no-lfs       # Skip LFS import/push
 #
 # Required .env variables:
 #   DEST_SEARCH_DIRS   - Comma-separated directories to search for repositories
@@ -29,6 +31,7 @@
 # Prerequisites:
 #   - Destination repositories must already be cloned locally
 #   - GitLab personal access token with write_repository scope
+#   - Git LFS installed if repositories use LFS
 # =============================================================================
 
 # Load common functions
@@ -47,6 +50,30 @@ ARCHIVE_INPUT_DIR="${ARCHIVE_INPUT_DIR:-$PROJECT_ROOT}"
 
 # Resolve archive input directory
 ARCHIVE_INPUT_DIR=$(resolve_path "$ARCHIVE_INPUT_DIR")
+
+# Default: include LFS
+INCLUDE_LFS=true
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --no-lfs)
+            INCLUDE_LFS=false
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--no-lfs]"
+            echo "  --no-lfs    Skip LFS import and push (default: include LFS)"
+            echo "  -h, --help  Show this help message"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            echo "Usage: $0 [--no-lfs]" >&2
+            exit 1
+            ;;
+    esac
+done
 
 # Parse DEST_SEARCH_DIRS into an array
 IFS=',' read -ra DEST_DIRS_ARRAY <<< "$DEST_SEARCH_DIRS"
@@ -118,7 +145,11 @@ echo "Extracted to temporary directory"
 echo "Repositories in archive:"
 for repo_dir in "$TEMP_EXTRACT_DIR"/*; do
     if [ -d "$repo_dir" ]; then
-        echo "  - $(basename "$repo_dir")"
+        local_lfs=""
+        if [ -d "$repo_dir/lfs" ]; then
+            local_lfs=" (includes LFS)"
+        fi
+        echo "  - $(basename "$repo_dir")$local_lfs"
     fi
 done
 
@@ -177,12 +208,56 @@ configure_gitlab_remote() {
 }
 
 # =============================================================================
+# LFS Functions
+# =============================================================================
+
+# Import LFS objects from the bundle's lfs directory
+import_lfs_objects() {
+    local lfs_source_dir=$1
+    
+    if [ ! -d "$lfs_source_dir" ]; then
+        return 0
+    fi
+    
+    echo "  Importing LFS objects..."
+    
+    # Ensure .git/lfs/objects exists
+    mkdir -p .git/lfs/objects
+    
+    # Copy LFS objects preserving directory structure
+    cp -r "$lfs_source_dir"/* .git/lfs/objects/
+    
+    local lfs_count
+    lfs_count=$(find "$lfs_source_dir" -type f | wc -l)
+    echo "  Imported $lfs_count LFS object(s)"
+    
+    return 0
+}
+
+# Push LFS objects to the remote
+push_lfs_objects() {
+    echo "  Pushing LFS objects to GitLab..."
+    
+    # Configure LFS to use the gitlab remote URL
+    local gitlab_url
+    gitlab_url=$(build_gitlab_url "$repo")
+    
+    # Push all LFS objects
+    if git lfs push --all gitlab 2>&1; then
+        echo "  LFS objects pushed successfully"
+    else
+        echo "  Warning: Some LFS objects may have failed to push"
+    fi
+}
+
+# =============================================================================
 # Bundle Application Function
 # =============================================================================
 
 apply_bundle() {
     local repo=$1
     local bundle_dir="$TEMP_EXTRACT_DIR/$repo"
+    local lfs_dir="$bundle_dir/lfs"
 
     print_subheader "Processing: $repo"
 
@@ -196,6 +271,15 @@ apply_bundle() {
     fi
     
     echo "Bundle: $(basename "$bundle_path")"
+    
+    # Check for LFS objects
+    local has_lfs=false
+    if [ -d "$lfs_dir" ] && [ -n "$(ls -A "$lfs_dir" 2>/dev/null)" ]; then
+        has_lfs=true
+        echo "LFS objects: yes"
+    else
+        echo "LFS objects: no"
+    fi
 
     # Find the repository in search directories
     local dest_repo_path
@@ -242,12 +326,20 @@ apply_bundle() {
     echo "  Imported refs:"
     git for-each-ref --format='    %(refname:short)' refs/remotes/bundle-import/ 2>/dev/null
     
-    # Step 3: Configure GitLab remote
-    echo "Step 3: Configuring GitLab remote..."
+    # Step 3: Import LFS objects if present
+    if [ "$INCLUDE_LFS" = true ] && [ "$has_lfs" = true ]; then
+        echo "Step 3: Importing LFS objects..."
+        import_lfs_objects "$lfs_dir"
+    else
+        echo "Step 3: LFS import skipped"
+    fi
+    
+    # Step 4: Configure GitLab remote
+    echo "Step 4: Configuring GitLab remote..."
     configure_gitlab_remote "$repo"
 
-    # Step 4: Push to GitLab
-    echo "Step 4: Pushing to GitLab..."
+    # Step 5: Push to GitLab
+    echo "Step 5: Pushing to GitLab..."
     
     # Push tags
     echo "  Pushing tags..."
@@ -266,9 +358,17 @@ apply_bundle() {
         echo "  Warning: Some branches may have failed to push"
         # Don't fail completely - some branches may have pushed successfully
     fi
+    
+    # Step 6: Push LFS objects if present
+    if [ "$INCLUDE_LFS" = true ] && [ "$has_lfs" = true ]; then
+        echo "Step 6: Pushing LFS objects..."
+        push_lfs_objects
+    else
+        echo "Step 6: LFS push skipped"
+    fi
 
-    # Step 5: Clean up temporary refs
-    echo "Step 5: Cleaning up temporary refs..."
+    # Step 7: Clean up temporary refs
+    echo "Step 7: Cleaning up temporary refs..."
     git for-each-ref --format='%(refname)' refs/remotes/bundle-import/ | while read -r ref; do
         git update-ref -d "$ref" 2>/dev/null
     done
@@ -289,6 +389,7 @@ done
 echo "GitLab host: $GITLAB_HOST"
 echo "GitLab group: $GITLAB_GROUP"
 echo "Auth method: $GITLAB_AUTH_METHOD"
+echo "Include LFS: $INCLUDE_LFS"
 
 success_count=0
 fail_count=0
