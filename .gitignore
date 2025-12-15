@@ -5,3 +5,4 @@ repos.txt
 *.tar.gz
 migration-suite*.txt
 images/
+docker-images.conf
