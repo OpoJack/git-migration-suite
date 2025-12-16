@@ -316,7 +316,11 @@ apply_bundle() {
     echo "Step 2: Fetching from bundle into local repository..."
     
     # Fetch branches into a temporary namespace and tags directly
-    if ! git fetch "$bundle_path" '+refs/heads/*:refs/remotes/bundle-import/*' '+refs/tags/*:refs/tags/*' 2>&1; then
+    # Handle both refs/heads/* (local branches) and refs/remotes/origin/* (remote tracking)
+    if ! git fetch "$bundle_path" \
+        '+refs/heads/*:refs/remotes/bundle-import/*' \
+        '+refs/remotes/origin/*:refs/remotes/bundle-import/*' \
+        '+refs/tags/*:refs/tags/*' 2>&1; then
         echo "Error: Failed to fetch from bundle"
         return 1
     fi
