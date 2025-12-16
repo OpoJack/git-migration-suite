@@ -286,18 +286,28 @@ process_repo() {
         done
 
         # Build revision ranges for incremental bundles
+        # We need to map refs to refs/heads/* format for proper bundle structure
         local bundle_refs=""
         
         for ref in $refs_to_bundle; do
             # Get the commit from the lookback period on this branch
             local base
             base=$(git rev-list -1 --before="$BUNDLE_LOOKBACK" "$ref" 2>/dev/null)
-            if [ -n "$base" ]; then
-                # Include commits after base up to branch tip
-                bundle_refs="$bundle_refs $base..$ref"
+            
+            # Determine the branch name (strip origin/ prefix if present)
+            local branch_name
+            if [[ "$ref" == origin/* ]]; then
+                branch_name="${ref#origin/}"
             else
-                # Branch is younger than lookback period, include all
-                bundle_refs="$bundle_refs $ref"
+                branch_name="$ref"
+            fi
+            
+            if [ -n "$base" ]; then
+                # Include commits after base up to branch tip, mapped to refs/heads/
+                bundle_refs="$bundle_refs $base..$ref:refs/heads/$branch_name"
+            else
+                # Branch is younger than lookback period, include all, mapped to refs/heads/
+                bundle_refs="$bundle_refs $ref:refs/heads/$branch_name"
             fi
         done
 
@@ -308,7 +318,10 @@ process_repo() {
         
         # Create the bundle
         echo "Creating bundle: ${repo}_${timestamp}.bundle"
-        echo "  Refs: $bundle_refs"
+        echo "  Refs:"
+        for ref in $bundle_refs; do
+            echo "    $ref"
+        done
         [ -n "$tags_to_include" ] && echo "  Tags:$tags_to_include"
         
         # shellcheck disable=SC2086
